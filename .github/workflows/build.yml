@@ -117,6 +117,22 @@ jobs:
 
           ACTION="$1"
 
+          NODES="
+          /sys/class/power_supply/usb/otg_switch
+          /sys/class/oplus_chg/usb/otg_switch
+          /sys/devices/platform/odm/odm:oppo_charger/power_supply/usb/otg_switch
+          "
+
+          find_writable_node() {
+              for n in $NODES; do
+                  if [ -w "$n" ]; then
+                      echo "$n"
+                      return 0
+                  fi
+              done
+              return 1
+          }
+
           case "$ACTION" in
             off)
               sync
@@ -124,37 +140,23 @@ jobs:
                 [ -d "$m" ] && umount -l "$m" 2>/dev/null
               done
 
-              FOUND=0
-              for p in /sys/class/typec/*; do
-                [ -d "$p" ] || continue
-                if [ -w "$p/port_type" ]; then
-                  FOUND=1
-                  echo sink > "$p/port_type" 2>/dev/null
-                fi
-              done
-
-              if [ "$FOUND" = "1" ]; then
-                echo "OK: port_type=sink"
+              NODE=$(find_writable_node)
+              if [ -n "$NODE" ]; then
+                echo 0 > "$NODE" 2>/dev/null
+                echo "OK: OTG off via $NODE"
               else
-                echo "ERR: no writable /sys/class/typec/*/port_type"
+                echo "ERR: no writable otg_switch node found"
                 exit 1
               fi
               ;;
 
             on)
-              FOUND=0
-              for p in /sys/class/typec/*; do
-                [ -d "$p" ] || continue
-                if [ -w "$p/port_type" ]; then
-                  FOUND=1
-                  echo dual > "$p/port_type" 2>/dev/null
-                fi
-              done
-
-              if [ "$FOUND" = "1" ]; then
-                echo "OK: port_type=dual"
+              NODE=$(find_writable_node)
+              if [ -n "$NODE" ]; then
+                echo 1 > "$NODE" 2>/dev/null
+                echo "OK: OTG on via $NODE"
               else
-                echo "ERR: no writable /sys/class/typec/*/port_type"
+                echo "ERR: no writable otg_switch node found"
                 exit 1
               fi
               ;;
@@ -227,9 +229,12 @@ jobs:
           package com.example.typecutter
 
           import android.app.Activity
+          import android.os.Build
           import android.os.Bundle
+          import android.view.WindowInsets
           import android.widget.Button
           import android.widget.LinearLayout
+          import android.widget.ScrollView
           import android.widget.TextView
           import android.widget.Toast
 
@@ -264,7 +269,20 @@ jobs:
                   layout.addView(status)
                   layout.addView(btnOff)
                   layout.addView(btnOn)
-                  setContentView(layout)
+
+                  val scroll = ScrollView(this).apply {
+                      addView(layout)
+                  }
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      scroll.setOnApplyWindowInsetsListener { v, insets ->
+                          val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                          v.setPadding(0, bars.top, 0, bars.bottom)
+                          insets
+                      }
+                  }
+
+                  setContentView(scroll)
               }
 
               private fun runAction(action: String) {
