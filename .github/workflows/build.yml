@@ -116,7 +116,57 @@ jobs:
           #!/system/bin/sh
 
           ACTION="$1"
-          NODE="/sys/devices/virtual/oplus_chg/usb/otg_switch"
+
+          # 候选节点列表
+          NODES="
+          /sys/class/power_supply/usb/usb_otg
+          /sys/class/power_supply/usb/otg_switch
+          /sys/class/oplus_chg/usb/otg_switch
+          /sys/devices/platform/otg_hack/votg_power
+          "
+
+          write_node() {
+              local node="$1"
+              local action="$2"
+              local val_off val_on
+
+              case "$node" in
+                  *usb_otg) val_off=0; val_on=1 ;;
+                  *otg_switch) val_off=0; val_on=1 ;;
+                  *votg_power) val_off=0; val_on=1 ;;
+                  *) return 1 ;;
+              esac
+
+              case "$action" in
+                  off)
+                      if echo "$val_off" > "$node" 2>/dev/null; then
+                          echo "WROTE $val_off -> $node"
+                          return 0
+                      fi
+                      ;;
+                  on)
+                      if echo "$val_on" > "$node" 2>/dev/null; then
+                          echo "WROTE $val_on -> $node"
+                          return 0
+                      fi
+                      ;;
+              esac
+              return 1
+          }
+
+          find_regulator_vbus() {
+              for d in /sys/class/regulator/*/; do
+                  name=$(cat "$d/name" 2>/dev/null | tr 'A-Z' 'a-z')
+                  case "$name" in
+                      *vbus*|*otg*)
+                          for f in state enable; do
+                              [ -w "$d/$f" ] && { echo "$d/$f"; return 0; }
+                          done
+                          ;;
+                  esac
+              done
+              return 1
+          }
 
           case "$ACTION" in
             off)
@@ -125,21 +175,41 @@ jobs:
                 [ -d "$m" ] && umount -l "$m" 2>/dev/null
               done
 
-              if [ -w "$NODE" ]; then
-                  echo 0 > "$NODE" 2>/dev/null
-              fi
-              setprop persist.sys.oplus.otg_support false 2>/dev/null
+              TRIED=""
+              for node in $NODES; do
+                  [ -w "$node" ] || continue
+                  if write_node "$node" "off"; then
+                      TRIED="$TRIED $node"
+                  fi
+              done
 
-              echo "OK: otg_switch=0, prop=false"
+              REG_NODE=$(find_regulator_vbus)
+              if [ -n "$REG_NODE" ]; then
+                  if echo 0 > "$REG_NODE" 2>/dev/null; then
+                      TRIED="$TRIED $REG_NODE"
+                  fi
+              fi
+
+              if [ -n "$TRIED" ]; then
+                  echo "OK_TRIED:$TRIED"
+              else
+                  echo "ERR: no candidate node accepted any off value"
+                  exit 1
+              fi
               ;;
 
             on)
-              if [ -w "$NODE" ]; then
-                  echo 1 > "$NODE" 2>/dev/null
-              fi
-              setprop persist.sys.oplus.otg_support true 2>/dev/null
+              TRIED=""
+              for node in $NODES; do
+                  [ -w "$node" ] || continue
+                  if write_node "$node" "on"; then
+                      TRIED="$TRIED $node"
+                  fi
+              done
+              REG_NODE=$(find_regulator_vbus)
+              [ -n "$REG_NODE" ] && echo 1 > "$REG_NODE" 2>/dev/null && TRIED="$TRIED $REG_NODE"
 
-              echo "OK: otg_switch=1, prop=true"
+              echo "OK_TRIED:$TRIED"
               ;;
 
             *)
