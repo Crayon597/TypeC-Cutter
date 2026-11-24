@@ -117,18 +117,42 @@ jobs:
 
           ACTION="$1"
 
-          NODES="
+          CANDIDATES="
           /sys/class/power_supply/usb/otg_switch
-          /sys/class/oplus_chg/usb/otg_switch
-          /sys/devices/platform/odm/odm:oppo_charger/power_supply/usb/otg_switch
+          /sys/class/power_supply/usb/otg_enable
+          /sys/class/typec/port0/power_role
+          /sys/class/typec/port0/vbus
+          /sys/devices/platform/soc/usbc0/otg_role
           "
 
-          find_writable_node() {
-              for n in $NODES; do
-                  if [ -w "$n" ]; then
-                      echo "$n"
-                      return 0
-                  fi
+          write_candidates() {
+              local node="$1"
+              local action="$2"
+              case "$action" in
+                  off)
+                      for val in 0 disabled sink off; do
+                          echo "$val" > "$node" 2>/dev/null && { echo "WROTE $val to $node"; return 0; }
+                      done
+                      ;;
+                  on)
+                      for val in 1 enabled dual on; do
+                          echo "$val" > "$node" 2>/dev/null && { echo "WROTE $val to $node"; return 0; }
+                      done
+                      ;;
+              esac
+              return 1
+          }
+
+          find_regulator_node() {
+              for d in /sys/class/regulator/*/; do
+                  name=$(cat "$d/name" 2>/dev/null | tr 'A-Z' 'a-z')
+                  case "$name" in
+                      *vbus*|*otg*)
+                          for f in state enable; do
+                              [ -w "$d/$f" ] && { echo "$d/$f"; return 0; }
+                          done
+                          ;;
+                  esac
               done
               return 1
           }
@@ -140,25 +164,45 @@ jobs:
                 [ -d "$m" ] && umount -l "$m" 2>/dev/null
               done
 
-              NODE=$(find_writable_node)
-              if [ -n "$NODE" ]; then
-                echo 0 > "$NODE" 2>/dev/null
-                echo "OK: OTG off via $NODE"
+              TRIED=""
+              SUCCESS=0
+
+              for node in $CANDIDATES; do
+                  [ -w "$node" ] || continue
+                  if write_candidates "$node" "off"; then
+                      TRIED="$TRIED $node"
+                      SUCCESS=1
+                  fi
+              done
+
+              REG_NODE=$(find_regulator_node)
+              if [ -n "$REG_NODE" ]; then
+                  if write_candidates "$REG_NODE" "off"; then
+                      TRIED="$TRIED $REG_NODE"
+                      SUCCESS=1
+                  fi
+              fi
+
+              if [ "$SUCCESS" = "1" ]; then
+                  echo "OK_TRIED:$TRIED"
               else
-                echo "ERR: no writable otg_switch node found"
-                exit 1
+                  echo "ERR: no candidate node accepted any off value"
+                  exit 1
               fi
               ;;
 
             on)
-              NODE=$(find_writable_node)
-              if [ -n "$NODE" ]; then
-                echo 1 > "$NODE" 2>/dev/null
-                echo "OK: OTG on via $NODE"
-              else
-                echo "ERR: no writable otg_switch node found"
-                exit 1
-              fi
+              TRIED=""
+              for node in $CANDIDATES; do
+                  [ -w "$node" ] || continue
+                  if write_candidates "$node" "on"; then
+                      TRIED="$TRIED $node"
+                  fi
+              done
+              REG_NODE=$(find_regulator_node)
+              [ -n "$REG_NODE" ] && write_candidates "$REG_NODE" "on" && TRIED="$TRIED $REG_NODE"
+
+              echo "OK_TRIED:$TRIED"
               ;;
 
             *)
