@@ -116,36 +116,7 @@ jobs:
           #!/system/bin/sh
 
           ACTION="$1"
-
-          discover_nodes() {
-              find /sys -type f \( -iname "*otg*" -o -iname "*vbus*" \) 2>/dev/null | while read -r f; do
-                  [ -w "$f" ] && echo "$f"
-              done
-          }
-
-          write_candidates() {
-              local node="$1"
-              local action="$2"
-              case "$action" in
-                  off)
-                      for val in 0 disabled sink off; do
-                          if echo "$val" > "$node" 2>/dev/null; then
-                              echo "WROTE $val -> $node"
-                              return 0
-                          fi
-                      done
-                      ;;
-                  on)
-                      for val in 1 enabled source dual on; do
-                          if echo "$val" > "$node" 2>/dev/null; then
-                              echo "WROTE $val -> $node"
-                              return 0
-                          fi
-                      done
-                      ;;
-              esac
-              return 1
-          }
+          NODE="/sys/devices/virtual/oplus_chg/usb/otg_switch"
 
           case "$ACTION" in
             off)
@@ -154,39 +125,21 @@ jobs:
                 [ -d "$m" ] && umount -l "$m" 2>/dev/null
               done
 
-              TRIED=""
-              SUCCESS=0
-              NODES=$(discover_nodes)
-
-              if [ -z "$NODES" ]; then
-                  echo "ERR: no writable otg/vbus node found at all"
-                  exit 1
+              if [ -w "$NODE" ]; then
+                  echo 0 > "$NODE" 2>/dev/null
               fi
+              setprop persist.sys.oplus.otg_support false 2>/dev/null
 
-              for node in $NODES; do
-                  if write_candidates "$node" "off"; then
-                      TRIED="$TRIED $node"
-                      SUCCESS=1
-                  fi
-              done
-
-              if [ "$SUCCESS" = "1" ]; then
-                  echo "OK_TRIED:$TRIED"
-              else
-                  echo "ERR: found writable nodes but none accepted off value: $NODES"
-                  exit 1
-              fi
+              echo "OK: otg_switch=0, prop=false"
               ;;
 
             on)
-              TRIED=""
-              NODES=$(discover_nodes)
-              for node in $NODES; do
-                  if write_candidates "$node" "on"; then
-                      TRIED="$TRIED $node"
-                  fi
-              done
-              echo "OK_TRIED:$TRIED"
+              if [ -w "$NODE" ]; then
+                  echo 1 > "$NODE" 2>/dev/null
+              fi
+              setprop persist.sys.oplus.otg_support true 2>/dev/null
+
+              echo "OK: otg_switch=1, prop=true"
               ;;
 
             *)
